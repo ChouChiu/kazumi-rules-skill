@@ -1,6 +1,6 @@
 ---
 name: kazumi-rules-skill
-description: "Create XPath rules for the Kazumi anime app using Chrome DevTools MCP. Use when asked to write a Kazumi rule, scrape an anime website for Kazumi, extract XPath for a video site, debug Kazumi rule issues, fix rule XPath not matching, or generate kazumi:// import links. Covers full pipeline: browser navigation, DOM inspection via evaluate_script, XPath extraction for searchList/searchName/searchResult/chapterRoads/chapterResult, JSON rule assembly with api levels 1-7, base64 encoding, and kazumi:// link export."
+description: "Create XPath rules for the Kazumi anime app using Chrome DevTools MCP. Use when asked to write a Kazumi rule, scrape an anime website for Kazumi, extract XPath for a video site, debug Kazumi rule issues, fix rule XPath not matching, or generate kazumi:// import links. Covers browser navigation, DOM inspection via evaluate_script, XPath extraction for searchList/searchName/searchResult/chapterRoads/chapterResult, JSON rule assembly with api levels 1-7, base64 encoding, and kazumi:// link export."
 ---
 
 # Kazumi Rules Skill
@@ -15,10 +15,10 @@ Kazumi is a cross-platform anime app. Its rule system uses JSON files with XPath
 
 | Field | Purpose |
 |-------|---------|
-| `searchList` | XPath to locate the container of all search result items |
+| `searchList` | XPath to locate each search result item node |
 | `searchName` | XPath (relative to `searchList`) to extract each result's title |
 | `searchResult` | XPath (relative to `searchList`) to extract the link to detail/play page |
-| `chapterRoads` | XPath to locate the container of all chapter/playlist items on detail page |
+| `chapterRoads` | XPath to locate each playback route / playlist container on detail page |
 | `chapterResult` | XPath (relative to `chapterRoads`) to extract each chapter link |
 
 **Full JSON rule structure (example: qifun, api:7):**
@@ -59,16 +59,16 @@ Kazumi is a cross-platform anime app. Its rule system uses JSON files with XPath
 
 **Important:** Do NOT use `@keyword` in XPath fields — `@keyword` is only for `searchURL`. XPath fields must be valid standalone expressions.
 
-**How relative XPath works in Kazumi:** `searchName` / `searchResult` / `chapterResult` are evaluated from within each container node returned by `searchList` / `chapterRoads`. Kazumi scopes the evaluation context, so community rules use `//h3` style (works because evaluation context is scoped to each container). In standard XPath, `.//h3` is the equivalent relative syntax — both work in Kazumi.
+**How relative XPath works in Kazumi:** `searchName` / `searchResult` / `chapterResult` are evaluated from within each node returned by `searchList` / `chapterRoads`. Community rules commonly use `//h3` style for these relative fields. In browser DevTools, a leading `//` is absolute, so verification snippets below normalize relative fields to `.//h3` only for local testing. Keep the final Kazumi rule in the community-compatible `//h3` style unless the user asks for strict XPath syntax.
 
 ### Advanced Options
 
 - **`usePost`**: Set `true` when the site uses POST for search. Determine `searchURL` via the Network panel (see POST searchURL section below).
 - **`userAgent`**: Optional custom User-Agent string.
-- **`referer`**: (api >= 4) If videos won't play, set this to the `baseURL` value. Available from Kazumi 1.6.8+.
+- **`referer`**: If videos won't play, set this to the `baseURL` value. Check the current KazumiRules API table before publishing; current public rules include `referer` alongside api 3+ features.
 - **`useLegacyParser`**: (api >= 3) Enable for iframe-based sites where the default JS hook parser fails.
 - **`adBlocker`**: (api >= 5) Set `true` to filter HLS ad segments during playback. Available from Kazumi 1.9.3+.
-- **`antiCrawlerConfig`**: (api >= 6) For sites with CAPTCHA verification. Supports image CAPTCHA (`captchaType: 1`) with XPath selectors for the CAPTCHA image, input field, and submit button.
+- **`antiCrawlerConfig`**: (api >= 6) For sites with CAPTCHA verification. Use `captchaImage`, `captchaInput`, and `captchaButton` for image CAPTCHA filling. Default to api 7 and include CAPTCHA-state detection fields (`captchaDetectType`, `captchaDetectValue`, `captchaScript`) so conditional CAPTCHA pages are handled. Downgrade only when the user explicitly needs compatibility with older Kazumi versions.
 - **`useNativePlayer`**: Enable by default; disable if videos fail to load.
 
 ## Prerequisites
@@ -121,7 +121,9 @@ If not configured, instruct the user to add to their MCP config:
 
 4. **🔴 CHECKPOINT: Verify the site is usable for rule development:**
    - Check for CAPTCHA or redirects after search
-   - If CAPTCHA detected → site not suitable for rule development; **STOP and report to user. Do not proceed.**
+   - If CAPTCHA blocks search but the page exposes image/input/button elements → collect selectors and continue with `"api": "7"` + `antiCrawlerConfig`; tell the user CAPTCHA handling must be tested in Kazumi.
+   - Fill `captchaDetectType` / `captchaDetectValue` / `captchaScript` so Kazumi can detect whether the current page is in CAPTCHA state.
+   - If CAPTCHA blocks DOM inspection or cannot be represented by image/input/button selectors → site not suitable for rule development; **STOP and report to user.**
    - If site navigation/ad redirects → site unsupported; **STOP.**
    - Only proceed if search works cleanly with visible result items.
 
@@ -153,24 +155,24 @@ If not configured, instruct the user to add to their MCP config:
    take_snapshot(verbose: false)
    ```
 
-3. **Use `evaluate_script` to find the list container.** Execute JS to test XPath candidates. The goal: find the parent element that contains ALL search result items.
+3. **Use `evaluate_script` to find the result item XPath.** Execute JS to test XPath candidates. The goal: make `searchList` return one node per search result, not a single outer wrapper.
 
    Test candidates iteratively (substitute `<YOUR_XPATH_CANDIDATE>` each time; use backticks if XPath contains single quotes):
    ```
-   evaluate_script(function: "() => { const el = document.evaluate(`<YOUR_XPATH_CANDIDATE>`, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue; return el ? el.children.length + ' children' : 'NO MATCH'; }")
+   evaluate_script(function: "() => { const xp = `<YOUR_XPATH_CANDIDATE>`; const nodes = document.evaluate(xp, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); return nodes.snapshotLength + ' result item nodes'; }")
    ```
 
 4. **Verification checklist for searchList XPath:**
-    - Returns a container element holding ALL search result children
-    - The container's direct children correspond one-to-one with search results
-    - Moving cursor over the matched element highlights all results in the UI
+    - Returns N nodes for N visible search results
+    - Each matched node highlights one complete result item
     - Use attribute-based XPath: `//ul[@class='result-list']` over `//div[1]/div[2]/ul`
-    - **If searchList returns 0 children:** The container is wrong — try parent or grandparent elements; also try `take_screenshot` to check if page actually loaded results
-    - **If searchList returns correct count but children aren't result items:** The container has extra non-result children — append a more specific child selector (e.g., `//li` or `//div[@class='item']`)
+    - **If searchList returns 0 nodes:** The XPath is wrong, or the page did not load results — try `take_screenshot`, `wait_for`, then retest
+    - **If searchList returns 1 wrapper node:** Append the repeated child selector, e.g. `//li` or `//div[@class='item']`
+    - **If searchList returns extra nodes:** Add a class/attribute filter or choose a narrower repeated child selector
     
     If children are `<li>`, append `//li`; if `<div>`, append `//div`. Final form: `//ul[@class='results']//li` or `//div[@class='items']//div`.
 
-   **🔴 CHECKPOINT: Search results container verified.** Confirm `evaluate_script` returns correct number of children matching search results. Proceed only after this XPath works.
+   **🔴 CHECKPOINT: Search result item XPath verified.** Confirm `evaluate_script` returns the same count as visible search results. Proceed only after this XPath works.
 
 ### Phase 4: Extract searchName XPath (relative to searchList)
 
@@ -180,7 +182,7 @@ After `searchList` locates the container, `searchName` is applied to each result
 
 2. **Use `evaluate_script`** to test XPath against one item. Substitute `<YOUR_searchList_XPATH>` with your actual searchList expression and `<YOUR_searchName_CANDIDATE>` with what you're testing. **Escaping tip:** if your XPath uses single quotes like `@class='foo'`, wrap the JS string in backticks or double quotes to avoid conflicts.
    ```
-   evaluate_script(function: "() => { const searchList = `<YOUR_searchList_XPATH>`; const searchName = `<YOUR_searchName_CANDIDATE>`; const items = document.evaluate(searchList, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); if (!items.snapshotLength) return 'searchList matched 0 items'; const first = items.snapshotItem(0); return document.evaluate(searchName, first, null, XPathResult.STRING_TYPE, null).stringValue || 'NO MATCH'; }")
+   evaluate_script(function: "() => { const searchList = `<YOUR_searchList_XPATH>`; const raw = `<YOUR_searchName_CANDIDATE>`; const searchName = raw.startsWith('//') ? '.' + raw : raw; const items = document.evaluate(searchList, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); if (!items.snapshotLength) return 'searchList matched 0 items'; const first = items.snapshotItem(0); return document.evaluate(searchName, first, null, XPathResult.STRING_TYPE, null).stringValue.trim() || 'NO MATCH'; }")
    ```
     Iterate until it returns the expected title text.
     - **If NO MATCH:** The XPath is evaluating from wrong context — try starting from the container child level; also check if the title is inside nested `<span>` or `<strong>` elements
@@ -219,17 +221,18 @@ On the detail/play page (determined by `searchResult`):
 
 1. **Take a snapshot** of the chapter/playlist area.
 
-2. **chapterRoads:** Find the container of ALL chapter/playlist items.
-    - Test with `evaluate_script`: the XPath should return a container whose children are chapter items
-    - If children are `<li>`, append `//li`; if `<div>`, append `//div`
-    - Example: `//ul[@class='anthology-list-play size']//li`
-    - **If chapterRoads returns 0 items:** The page structure may be wrapped in `<iframe>` — check with `take_snapshot` and look for iframe elements; if present, enable `"useLegacyParser": true` and retry
+2. **chapterRoads:** Find the playback route / playlist container nodes.
+    - Test with `evaluate_script`: the XPath should return one node per route/playlist container
+    - If there is one playlist `<ul>` containing all episode `<li>` nodes, use the `<ul>` as `chapterRoads`; put the episode link path in `chapterResult`
+    - If the page has multiple route `<div>` containers, use the repeated route `<div>` nodes as `chapterRoads`
+    - Example: `//ul[@class='anthology-list-play size']`
+    - **If chapterRoads returns 0 route containers:** The page structure may be wrapped in `<iframe>` — check with `take_snapshot` and look for iframe elements; if present, enable `"useLegacyParser": true` and retry
     - **If the page is not the expected detail/play page:** `searchResult` XPath navigated to wrong page type — return to Phase 5 and re-examine link targets
 
 3. **chapterResult:** Relative XPath to extract each chapter's link.
-   - Use `evaluate_script` to locate a specific chapter link's full XPath from the chapterRoads container:
+   - Use `evaluate_script` to verify each route container exposes chapter links. Normalize leading `//` to `.//` only for browser testing:
      ```
-     evaluate_script(function: "() => { const roads = document.evaluate(`<YOUR_chapterRoads_XPATH>`, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); if (!roads.snapshotLength) return 'chapterRoads empty'; const firstRoad = roads.snapshotItem(0); const links = firstRoad.querySelectorAll('a'); return links.length ? 'found ' + links.length + ' links' : 'no links found'; }")
+     evaluate_script(function: "() => { const roadsXPath = `<YOUR_chapterRoads_XPATH>`; const raw = `<YOUR_chapterResult_CANDIDATE>`; const chapterResult = raw.startsWith('//') ? '.' + raw : raw; const roads = document.evaluate(roadsXPath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); if (!roads.snapshotLength) return 'chapterRoads empty'; const firstRoad = roads.snapshotItem(0); const links = document.evaluate(chapterResult, firstRoad, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); return links.snapshotLength ? 'found ' + links.snapshotLength + ' chapter links in first route' : 'no links found'; }")
      ```
    - From the full XPath, strip the `chapterRoads` prefix and any positional index like `[12]`:
      - Full: `//div[@id='tagContent']//div[2]/ul/li[12]/a`
@@ -239,7 +242,7 @@ On the detail/play page (determined by `searchResult`):
 
 4. **Verify both XPath** with `evaluate_script`:
     ```
-    evaluate_script(function: "() => { const roads = document.evaluate(`<YOUR_chapterRoads_XPATH>`, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); return roads.snapshotLength + ' chapter items found'; }")
+    evaluate_script(function: "() => { const roads = document.evaluate(`<YOUR_chapterRoads_XPATH>`, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); return roads.snapshotLength + ' route containers found'; }")
     ```
 
    **🔴 CHECKPOINT: Chapter extraction verified.** Both `chapterRoads` and `chapterResult` return expected counts. Proceed only after both XPath work correctly.
@@ -258,19 +261,21 @@ On the detail/play page (determined by `searchResult`):
 
 3. **Validation checklist before export:**
    - `searchURL` contains `@keyword` placeholder
-   - `searchList`, `chapterRoads` identify containers (end with `//li`, `//div`, etc.)
+   - `searchList` identifies repeated result item nodes (often ends with `//li` or a repeated item `//div`)
+   - `chapterRoads` identifies route/playlist containers, while `chapterResult` identifies episode links inside each route
    - `searchName`, `searchResult` are relative to searchList
    - `chapterResult` is relative to chapterRoads
    - XPath expressions start with `//`
    - No `/html/body` prefixes
-   - Set `"api"` based on minimum Kazumi version needed:
+   - Set `"api"` to `"7"` by default:
      - `"1"`: basic (Kazumi 1.0.0+)
      - `"2"`: POST support (Kazumi >= 1.3.0)
-     - `"3"`: legacy parser (Kazumi >= 1.3.6)
-     - `"4"`: Referer header support (Kazumi >= 1.6.8)
+     - `"3"`: legacy parser / referer support in the current KazumiRules API table (Kazumi >= 1.3.6)
+     - `"4"`: compatibility level used by some older rules/docs (Kazumi >= 1.6.8)
      - `"5"`: HLS ad filtering (Kazumi >= 1.9.3)
-     - `"6"` / `"7"`: anti-crawler / CAPTCHA support
-   - Pick the LOWEST api level that covers all features used. Default to `"4"` for a standard rule with `usePost: false` and `useLegacyParser: false`.
+     - `"6"`: anti-crawler / CAPTCHA image/input/button support
+     - `"7"`: CAPTCHA-state detection support via `captchaDetectType`, `captchaDetectValue`, and `captchaScript`
+   - Use `"api": "7"` for new rules unless the user explicitly requests compatibility with an older Kazumi version; then downgrade to the highest supported api that still covers required features.
 
 ### Phase 8: Export as Import Link
 
@@ -283,7 +288,7 @@ After validating the rule JSON, **you MUST execute the following steps and outpu
 
    Or inline with a one-liner:
    ```bash
-   echo -n '[{"api":"7","type":"anime","name":"<sitename>",...}]' | base64
+   echo -n '[{"api":"7","type":"anime","name":"<sitename>",...}]' | base64 | tr -d '\n'
    ```
 
 2. **Take the base64 output and construct the import link:**
@@ -299,10 +304,10 @@ After validating the rule JSON, **you MUST execute the following steps and outpu
    [{"api":"7","type":"anime","name":"mysite",...}]
    ```
 
-   Import link: `kazumi://eyJhcGkiOiI3IiwidHlwZSI6...`
+   Import link: `kazumi://W3siYXBpIjoiNyIsInR5cGUiOi...`
 
-在 Kazumi 中点击此链接即可导入规则。
-````
+   在 Kazumi 中点击此链接即可导入规则。
+   ````
 
 ### Phase 9: 🛑 STOP — Test & Iterate with the User
 
@@ -336,7 +341,7 @@ When writing or debugging Kazumi rules, **do NOT** do the following:
 | 5 | Skip `wait_for` before extracting XPath | JS-rendered DOM may not be ready; XPath returns 0 elements silently | Always `wait_for(text: ["..."])` before `evaluate_script` on the target area |
 | 6 | Use `searchName` XPath as `searchResult` without checking link targets | The name element may not be clickable or may link to wrong page | Always inspect the element's parent `<a>` tag or test click navigation |
 | 7 | Skip `evaluate_script` verification and assume XPath works | XPath that looks correct may return 0 elements at runtime | Always run the verification `evaluate_script` snippet from each phase |
-| 8 | Set `"api"` higher than needed | Unnecessary version bump limits compatibility with older Kazumi installs | Pick the LOWEST api level covering used features (default `"4"`) |
+| 8 | Downgrade `"api"` without a compatibility requirement | Older api levels may omit CAPTCHA-state detection and break sites with conditional CAPTCHA | Default to `"api": "7"`; downgrade only when the user explicitly needs older Kazumi compatibility |
 | 9 | Export rule without base64-encoding validation | Truncated or malformed base64 = broken import link | Always test with `echo -n '[...]' | base64` and verify no line breaks |
 | 10 | Proceed through Phase 3-6 without confirming each checkpoint | Errors cascade: wrong searchList → wrong searchName → wrong chapterResult | Each phase has a 🔴 CHECKPOINT; do not skip |
 | 11 | Write rule for SPA / JS-rendered / API-search site | Kazumi parser requires server-rendered HTML; SPA/API sites return empty or JSON responses | Run Phase 1 step 3 detection checks first; if detected → STOP, site unsupported |
@@ -379,9 +384,9 @@ All tool calls used in this skill. Each tool is documented in the [Chrome DevToo
 
 | Pattern | Example (from real rules) |
 |---------|---------------------------|
-| Class-based container | `//div[@class='row gutter-20']` (qifun) |
-| ID-based container | `//div[@id='tagContent']//div` (qifun chapterRoads) |
-| Tag + class selector | `//h6[@class='title']` (qifun searchName) |
+| Class-based result item | `//div[@class='vod-detail style-detail cor4 search-list']` (giriGiriLove / xfdm style) |
+| Playlist container | `//ul[@class='anthology-list-play size']` (giriGiriLove / xfdm style) |
+| Relative title link | `//div/div[2]/a` (giriGiriLove style) |
 | Link within item | `//a` or `//div/a` (most searchResult) |
 | List item links | `//li/a` (most chapterResult) |
 | Class name with spaces | `//div[@class='vod-detail style-detail cor4 search-list']` (akianime) |
