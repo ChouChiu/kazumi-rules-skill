@@ -1,6 +1,6 @@
 ---
 name: kazumi-rules-skill
-description: "Create XPath rules for the Kazumi anime app using Chrome DevTools MCP. Use when asked to write a Kazumi rule, scrape an anime website for Kazumi, extract XPath for a video site, debug Kazumi rule issues, fix rule XPath not matching, or generate kazumi:// import links. Covers browser navigation, DOM inspection via evaluate_script, XPath extraction for searchList/searchName/searchResult/chapterRoads/chapterResult, JSON rule assembly with api levels 1-7, base64 encoding, and kazumi:// link export."
+description: "Create Kazumi anime app rules as a single JSON object using Chrome DevTools MCP and Kazumi-compatible basic XPath. Use when asked to write a Kazumi rule, scrape an anime website for Kazumi, extract XPath for a video site, debug Kazumi rule issues, fix rule XPath not matching, or generate kazumi:// import links. Covers browser navigation, XPath extraction for searchList/searchName/searchResult/chapterRoads/chapterResult, api levels 1-7, base64 encoding, and link export."
 ---
 
 # Kazumi Rules Skill
@@ -9,7 +9,9 @@ Guide for LLM to write and debug XPath rules for [Kazumi](https://github.com/Pre
 
 ## Kazumi Rule System Overview
 
-Kazumi is a cross-platform anime app. Its rule system uses JSON files with XPath expressions to scrape anime websites — search, list results, parse chapters, and extract video URLs. Each rule is a JSON object defining how to interact with a specific anime website.
+Kazumi is a cross-platform anime app. Its rule system uses JSON files with XPath expressions to scrape anime websites — search, list results, parse chapters, and extract video URLs. Each rule is one JSON object defining how to interact with a specific anime website.
+
+**Rule payload shape:** Output exactly one JSON object for one rule. Do not wrap it in an array. A valid export starts with `{` and ends with `}`, not `[` / `]`.
 
 **Key XPath fields in a rule:**
 
@@ -60,6 +62,38 @@ Kazumi is a cross-platform anime app. Its rule system uses JSON files with XPath
 **Important:** Do NOT use `@keyword` in XPath fields — `@keyword` is only for `searchURL`. XPath fields must be valid standalone expressions.
 
 **How relative XPath works in Kazumi:** `searchName` / `searchResult` / `chapterResult` are evaluated from within each node returned by `searchList` / `chapterRoads`. Community rules commonly use `//h3` style for these relative fields. In browser DevTools, a leading `//` is absolute, so verification snippets below normalize relative fields to `.//h3` only for local testing. Keep the final Kazumi rule in the community-compatible `//h3` style unless the user asks for strict XPath syntax.
+
+### Kazumi-Compatible XPath Subset
+
+Kazumi uses the Dart `xpath_selector` parser, which supports basic XPath syntax and CSS-style attribute selector operators. Browser DevTools supports a larger XPath dialect than Kazumi, so passing `document.evaluate` in Chrome is necessary but not sufficient.
+
+**Use these XPath forms by default:**
+
+| Intent | Prefer |
+|--------|--------|
+| Descendant element | `//div`, `//ul//li`, `//a` |
+| Direct child chain | `//div/ul/li/a` |
+| Exact attribute | `//div[@class='item']` |
+| Attribute contains word | `//div[@class~='active']` |
+| Attribute starts with | `//a[@href^='/vod/']` |
+| Attribute ends with | `//img[@src$='.webp']` |
+| Attribute contains substring | `//div[@class*='search']` |
+| Simple positional narrowing | `//div[1]`, `//li/a[1]` only when unavoidable |
+
+**Do not emit advanced browser-only XPath unless the user explicitly asks to experiment in Kazumi:**
+
+| Avoid | Use Instead |
+|-------|-------------|
+| `contains(@class, 'item')` | `[@class*='item']` or `[@class~='item']` |
+| `starts-with(@href, '/vod')` | `[@href^='/vod']` |
+| `substring(...)`, `normalize-space(...)`, `string(...)`, `last()` | Narrow with tags and supported attribute predicates |
+| `text()` predicates such as `//a[text()='播放']` | Select the element with tag/attribute, then let Kazumi read text |
+| Union `//a | //button` | Pick one stable path and verify it |
+| Parent/sibling/ancestor axes like `../`, `following-sibling::`, `ancestor::` | Start from the repeated container and walk downward |
+| Boolean predicates with `and`, such as `//a[@class='x' and @href='/y']` | Pick the single most stable attribute, or narrow with a downward tag path |
+| Complex boolean predicates with `or` | Pick one stable path and verify it |
+
+If a selector needs unsupported syntax to be precise, choose a broader Kazumi-compatible XPath that returns the right repeated nodes after testing. Prefer stable over clever.
 
 ### Advanced Options
 
@@ -261,11 +295,14 @@ On the detail/play page (determined by `searchResult`):
 
 3. **Validation checklist before export:**
    - `searchURL` contains `@keyword` placeholder
+   - Final rule is a single JSON object, not an array of objects
    - `searchList` identifies repeated result item nodes (often ends with `//li` or a repeated item `//div`)
    - `chapterRoads` identifies route/playlist containers, while `chapterResult` identifies episode links inside each route
    - `searchName`, `searchResult` are relative to searchList
    - `chapterResult` is relative to chapterRoads
    - XPath expressions start with `//`
+   - XPath expressions stay inside the Kazumi-compatible subset above; replace functions like `contains()` / `starts-with()` with attribute operators such as `*=` / `^=`
+   - XPath expressions do not use boolean operators such as `and`; choose one stable attribute or narrow by tag path instead
    - No `/html/body` prefixes
    - Set `"api"` to `"7"` by default:
      - `"1"`: basic (Kazumi 1.0.0+)
@@ -288,7 +325,7 @@ After validating the rule JSON, **you MUST execute the following steps and outpu
 
    Or inline with a one-liner:
    ```bash
-   echo -n '[{"api":"7","type":"anime","name":"<sitename>",...}]' | base64 | tr -d '\n'
+   echo -n '{"api":"7","type":"anime","name":"<sitename>",...}' | base64 | tr -d '\n'
    ```
 
 2. **Take the base64 output and construct the import link:**
@@ -299,14 +336,15 @@ After validating the rule JSON, **you MUST execute the following steps and outpu
 3. **Present the final link to the user clearly.** Output both the JSON rule (for review) and the import link:
 
    ````markdown
-   Completed rule:
+   完整规则 JSON:
+   
    ```json
-   [{"api":"7","type":"anime","name":"mysite",...}]
+   {"api":"7","type":"anime","name":"mysite",...}
    ```
 
-   Import link: `kazumi://W3siYXBpIjoiNyIsInR5cGUiOi...`
+   导入链接: `kazumi://eyJhcGkiOiI3IiwidHlwZSI6ImFuaW1lIiwibmFtZSI6...`
 
-   在 Kazumi 中点击此链接即可导入规则。
+   在 Kazumi 导入规则测试 。
    ````
 
 ### Phase 9: 🛑 STOP — Test & Iterate with the User
@@ -342,9 +380,11 @@ When writing or debugging Kazumi rules, **do NOT** do the following:
 | 6 | Use `searchName` XPath as `searchResult` without checking link targets | The name element may not be clickable or may link to wrong page | Always inspect the element's parent `<a>` tag or test click navigation |
 | 7 | Skip `evaluate_script` verification and assume XPath works | XPath that looks correct may return 0 elements at runtime | Always run the verification `evaluate_script` snippet from each phase |
 | 8 | Downgrade `"api"` without a compatibility requirement | Older api levels may omit CAPTCHA-state detection and break sites with conditional CAPTCHA | Default to `"api": "7"`; downgrade only when the user explicitly needs older Kazumi compatibility |
-| 9 | Export rule without base64-encoding validation | Truncated or malformed base64 = broken import link | Always test with `echo -n '[...]' | base64` and verify no line breaks |
+| 9 | Export rule without base64-encoding validation | Truncated or malformed base64 = broken import link | Always test with `echo -n '{...}' | base64` and verify no line breaks |
 | 10 | Proceed through Phase 3-6 without confirming each checkpoint | Errors cascade: wrong searchList → wrong searchName → wrong chapterResult | Each phase has a 🔴 CHECKPOINT; do not skip |
 | 11 | Write rule for SPA / JS-rendered / API-search site | Kazumi parser requires server-rendered HTML; SPA/API sites return empty or JSON responses | Run Phase 1 step 3 detection checks first; if detected → STOP, site unsupported |
+| 12 | Wrap one rule as `[{"api":"7",...}]` | Kazumi imports one rule object; array payloads are the wrong shape for this skill's output | Output `{"api":"7",...}` exactly |
+| 13 | Use advanced browser XPath functions such as `contains()`, `starts-with()`, `normalize-space()`, `text()`, boolean `and`, or union `|` | Chrome `document.evaluate` accepts more syntax than Kazumi's `xpath_selector` parser | Use simple tag paths and supported attribute operators (`=`, `~=`, `^=`, `$=`, `*=`); for multiple conditions, choose the single most stable attribute |
 
 ## Troubleshooting
 
@@ -400,4 +440,5 @@ All tool calls used in this skill. Each tool is documented in the [Chrome DevToo
 | [Kazumi Rule Development Example](https://kazumi.app/docs/rules/develop-rules-example) | Step-by-step tutorial with screenshots | Tutorial |
 | [KazumiRules Repository](https://github.com/Predidit/KazumiRules) | Community-maintained rule collection (reference implementations) | Examples |
 | [Kazumi App](https://github.com/Predidit/Kazumi) | Kazumi source code and releases | Repository |
+| [xpath_selector](https://github.com/simonkimi/xpath_selector) | Parser used by Kazumi; supports basic XPath and CSS-style attribute selector operators | Repository |
 | [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) | MCP server enabling browser automation for XPath extraction | Tool

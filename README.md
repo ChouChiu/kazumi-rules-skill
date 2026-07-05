@@ -6,9 +6,10 @@
 
 - 自动导航目标动漫网站并执行搜索
 - 通过 `evaluate_script` 提取 XPath 表达式（`searchList`、`searchName`、`searchResult`、`chapterRoads`、`chapterResult`）
-- 组装 JSON 规则（api 级别 1-7）
+- 组装单个 JSON 对象规则（api 级别 1-7，不输出数组）
 - Base64 编码并导出 `kazumi://` 导入链接
 - 调试 XPath 匹配失败、播放异常等问题
+- 避免 Kazumi 不支持的高级 XPath，优先使用 `xpath_selector` 兼容的基础路径和属性选择器
 
 ## 使用场景
 
@@ -52,4 +53,5 @@ npx skills add ChouChiu/kazumi-rules-skill -y -g
 - [Kazumi 规则开发示例](https://kazumi.app/docs/rules/develop-rules-example)
 - [KazumiRules 社区规则仓库](https://github.com/Predidit/KazumiRules)
 - [Kazumi App](https://github.com/Predidit/Kazumi)
+- [xpath_selector](https://github.com/simonkimi/xpath_selector)
 - [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp)
