@@ -1,6 +1,6 @@
 ---
 name: kazumi-rules-skill
-description: "Create Kazumi anime app rules as a single JSON object using Chrome DevTools MCP and Kazumi-compatible basic XPath. Use when asked to write a Kazumi rule, scrape an anime website for Kazumi, extract XPath for a video site, debug Kazumi rule issues, fix rule XPath not matching, or generate kazumi:// import links. Covers browser navigation, XPath extraction for searchList/searchName/searchResult/chapterRoads/chapterResult, api levels 1-7, base64 encoding, and link export."
+description: "Create, validate, encode, and test Kazumi anime app rules as a single JSON object using Chrome DevTools MCP, bundled Python tools, and Kazumi-compatible basic XPath. Use when asked to write a Kazumi rule, scrape an anime website for Kazumi, extract XPath for a video site, debug Kazumi rule issues, fix rule XPath not matching, validate base64/kazumi:// links, or test search/chapter/video parsing. Covers browser navigation, XPath extraction for searchList/searchName/searchResult/chapterRoads/chapterResult, api levels 1-7, base64 encoding, link export, and live rule probing."
 ---
 
 # Kazumi Rules Skill
@@ -100,7 +100,7 @@ If a selector needs unsupported syntax to be precise, choose a broader Kazumi-co
 - **`usePost`**: Set `true` when the site uses POST for search. Determine `searchURL` via the Network panel (see POST searchURL section below).
 - **`userAgent`**: Optional custom User-Agent string.
 - **`referer`**: If videos won't play, set this to the `baseURL` value. Check the current KazumiRules API table before publishing; current public rules include `referer` alongside api 3+ features.
-- **`useLegacyParser`**: (api >= 3) Enable for iframe-based sites where the default JS hook parser fails.
+- **`useLegacyParser`**: (api >= 3) Enable for iframe-based or WebView parser-sensitive sites where the default JS hook parser fails. Keep it enabled when real Kazumi playback requires LegacyParser, even if a static probe can see media URLs in the HTML.
 - **`adBlocker`**: (api >= 5) Set `true` to filter HLS ad segments during playback. Available from Kazumi 1.9.3+.
 - **`antiCrawlerConfig`**: (api >= 6) For sites with CAPTCHA verification. Use `captchaImage`, `captchaInput`, and `captchaButton` for image CAPTCHA filling. Default to api 7 and include CAPTCHA-state detection fields (`captchaDetectType`, `captchaDetectValue`, `captchaScript`) so conditional CAPTCHA pages are handled. Downgrade only when the user explicitly needs compatibility with older Kazumi versions.
 - **`useNativePlayer`**: Enable by default; disable if videos fail to load.
@@ -117,6 +117,37 @@ If not configured, instruct the user to add to their MCP config:
   "command": ["npx", "-y", "chrome-devtools-mcp@latest"]
 }
 ```
+
+## Bundled Python Tools
+
+Use the bundled scripts before handing a rule to the user. They use only Python standard library modules, so no package install is required.
+
+| Tool | Purpose | Use When |
+|------|---------|----------|
+| `scripts/kazumi_rule_codec.py` | Load a rule from JSON, raw base64, or `kazumi://`; reject array payloads; validate required fields and unsupported XPath; emit normalized JSON and a verified import link | Before Phase 8 export, or when debugging broken base64/import links |
+| `scripts/kazumi_rule_probe.py` | Fetch the live site, test search results, open one result, extract chapter roads/results, and inspect one episode page for direct media or iframe hints | Before final delivery when network access is allowed, or when user reports search/chapter/playback failures |
+
+**Codec examples:**
+
+```bash
+python3 scripts/kazumi_rule_codec.py /tmp/kazumi-rule.json --output /tmp/kazumi-rule.normalized.json --link-output /tmp/kazumi-rule.link
+python3 scripts/kazumi_rule_codec.py 'kazumi://eyJhcGkiOiI3IiwidHlwZSI6...' --report
+```
+
+**Probe example:**
+
+```bash
+python3 scripts/kazumi_rule_probe.py /tmp/kazumi-rule.json --keyword "葬送的芙莉莲" --probe-iframe --report-output /tmp/kazumi-probe.json
+```
+
+Interpret `kazumi_rule_probe.py` results:
+
+- `search.ok=false` → fix `searchURL` or `searchList`.
+- `playlist.ok=false` → fix `searchResult`, `chapterRoads`, or `chapterResult`.
+- `parse.ok=true` with `directMediaUrls` → episode page exposes a direct media URL; this does not prove LegacyParser can be disabled.
+- `parse.ok=true` only after iframe probing, or `suggestEnableLegacyParser=true` → set `"useLegacyParser": true` and retest in Kazumi.
+- `parse.ok=false` with iframe or JavaScript-heavy pages → Python cannot execute the page; verify with Kazumi/WebView and consider `"useLegacyParser": true`.
+- Do not turn off `"useLegacyParser"` only because the Python probe found `directMediaUrls`. Kazumi playback testing is authoritative.
 
 ## Workflow: Writing a Kazumi Rule
 
@@ -314,26 +345,32 @@ On the detail/play page (determined by `searchResult`):
      - `"7"`: CAPTCHA-state detection support via `captchaDetectType`, `captchaDetectValue`, and `captchaScript`
    - Use `"api": "7"` for new rules unless the user explicitly requests compatibility with an older Kazumi version; then downgrade to the highest supported api that still covers required features.
 
+4. **Run the codec tool.** Save the rule as a single JSON object and run:
+   ```bash
+   python3 scripts/kazumi_rule_codec.py /tmp/kazumi-rule.json --output /tmp/kazumi-rule.normalized.json --link-output /tmp/kazumi-rule.link
+   ```
+   - If it reports "single JSON object, not an array" → remove the surrounding `[...]`.
+   - If it reports unsupported XPath → replace the XPath before export.
+   - Use the normalized JSON and link produced by this tool in Phase 8.
+
+5. **Run the live probe when network access is available.**
+   ```bash
+   python3 scripts/kazumi_rule_probe.py /tmp/kazumi-rule.normalized.json --keyword "葬送的芙莉莲" --probe-iframe --report-output /tmp/kazumi-probe.json
+   ```
+   Continue only after search and playlist checks pass. If the probe suggests enabling `useLegacyParser`, update the rule and rerun the codec/probe tools. If real Kazumi playback requires LegacyParser, keep `"useLegacyParser": true` even when the probe finds direct media URLs.
+
 ### Phase 8: Export as Import Link
 
 After validating the rule JSON, **you MUST execute the following steps and output the result to the user:**
 
-1. **Write the complete rule JSON to a temp file**, then run:
+1. **Write the complete rule JSON to a temp file**, then run the codec tool:
    ```bash
-   cat /tmp/kazumi-rule.json | base64 | tr -d '\n'
+   python3 scripts/kazumi_rule_codec.py /tmp/kazumi-rule.json --output /tmp/kazumi-rule.normalized.json --link-output /tmp/kazumi-rule.link
    ```
 
-   Or inline with a one-liner:
-   ```bash
-   echo -n '{"api":"7","type":"anime","name":"<sitename>",...}' | base64 | tr -d '\n'
-   ```
+2. **Read `/tmp/kazumi-rule.link`** and use that verified `kazumi://` import link. Do not hand-write base64 when the tool is available.
 
-2. **Take the base64 output and construct the import link:**
-   ```
-   kazumi://<paste_base64_output_here>
-   ```
-
-3. **Present the final link to the user clearly.** Output both the JSON rule (for review) and the import link:
+3. **Present the final link to the user clearly.** Output both the normalized JSON rule (for review) and the import link:
 
    ````markdown
    完整规则 JSON:

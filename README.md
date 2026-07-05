@@ -10,6 +10,7 @@
 - Base64 编码并导出 `kazumi://` 导入链接
 - 调试 XPath 匹配失败、播放异常等问题
 - 避免 Kazumi 不支持的高级 XPath，优先使用 `xpath_selector` 兼容的基础路径和属性选择器
+- 内置 Python 工具：校验/转换规则与 `kazumi://` base64，探测搜索、播放列表和播放页解析线索
 
 ## 使用场景
 
@@ -17,6 +18,16 @@
 - 提取视频站点的 XPath
 - 调试规则不匹配问题
 - 生成 kazumi:// 导入链接
+
+## 内置工具
+
+```bash
+python3 skills/kazumi-rules-skill/scripts/kazumi_rule_codec.py /tmp/kazumi-rule.json --output /tmp/kazumi-rule.normalized.json --link-output /tmp/kazumi-rule.link
+python3 skills/kazumi-rules-skill/scripts/kazumi_rule_probe.py /tmp/kazumi-rule.normalized.json --keyword "葬送的芙莉莲" --probe-iframe
+```
+
+- `kazumi_rule_codec.py`：读取 JSON、base64 或 `kazumi://`，拒绝数组规则，校验 XPath 和 base64 往返，输出规范 JSON 与导入链接。
+- `kazumi_rule_probe.py`：实际请求站点，检查搜索结果、播放列表、播放页媒体地址或 iframe，并在需要时建议启用 `useLegacyParser`；不会因为静态抓到直链就建议关闭 LegacyParser。
 
 ## 前置条件
 
