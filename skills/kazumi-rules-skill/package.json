@@ -1,0 +1,11 @@
+{
+  "name": "kazumi-rules-skill-tools",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.ts"
+  }
+}
